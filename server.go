@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -48,7 +48,9 @@ func start() {
 
 	//server
 	server = &http.Server{
-		IdleTimeout: 90 * time.Second,
+		IdleTimeout:  90 * time.Second,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 30 * time.Second,
 	}
 	if pem == "" || key == "" {
 		server.Addr = ":80"
@@ -57,50 +59,41 @@ func start() {
 	}
 	http.HandleFunc("/", routeHandle)
 
-	pcolor.PrintSucc(prefix, "listening %s\n", server.Addr)
-
 	go func() {
+		var serveErr error
 		if pem == "" || key == "" {
-			if err = server.ListenAndServe(); err != nil {
-				pcolor.PrintFatal(prefix, err.Error())
+			if serveErr = server.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+				pcolor.PrintFatal(prefix, serveErr.Error())
 				return
 			}
 		} else {
-			if err = server.ListenAndServeTLS(pem, key); err != nil {
-				pcolor.PrintFatal(prefix, err.Error())
+			if serveErr = server.ListenAndServeTLS(pem, key); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+				pcolor.PrintFatal(prefix, serveErr.Error())
 				return
 			}
-		}
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			pcolor.PrintFatal(prefix, err.Error())
-			return
 		}
 
 		//优雅关闭
 		pcolor.PrintSucc(prefix, "server exited!")
 	}()
 
-	return
+	pcolor.PrintSucc(prefix, "listening %s\n", server.Addr)
 }
 
 func routeHandle(w http.ResponseWriter, r *http.Request) {
 	var err error
 	var code int
-
 	var userId int64
-	var req []byte
-	var res []byte
-
+	var req, res []byte
 	requestPath := r.URL.Path
-	//难免会有带参数的地址虽然很少
 	requestRawPath := requestPath
+
 	if r.URL.RawQuery != "" {
 		requestRawPath += "?" + r.URL.RawQuery
 	}
 
 	defer func() {
 		_ = r.Body.Close()
-		//处理错误
 		var errStr string
 		if err != nil {
 			errStr = err.Error()
@@ -111,100 +104,142 @@ func routeHandle(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(code)
 			_, _ = w.Write([]byte(errStr))
 		}
-
 		logCollector, exists := config.Value[string]("LOG COLLECTOR")
 		if !exists || logCollector == "" {
 			return
 		}
-		//处理日志
 		ip := clientIP(r)
 		go log(logCollector, ip, r.RequestURI, userId, req, res, errStr)
 	}()
 
-	//检查User-Agent
-	if err = userAgent(r.Header.Get("User-Agent")); err != nil {
+	if err = handleUserAgent(r); err != nil {
 		code = http.StatusForbidden
-		err = errors.WithStack(err)
 		return
 	}
 
-	//检查uri
 	domain, uriPath, err := requestPathParts(requestPath)
 	if err != nil {
-		err = errors.WithStack(err)
 		return
 	}
 
-	//取出server地址
 	serverAddr, err := route(domain)
 	if err != nil {
 		code = http.StatusNotFound
 		return
 	}
 
-	//读取body
-	if req, err = io.ReadAll(r.Body); err != nil {
-		err = errors.WithStack(err)
+	if req, err = handleBody(r); err != nil {
 		code = http.StatusServiceUnavailable
 		return
 	}
 
-	//签名是否存在
+	ak, err := handleAuth(r, req, requestRawPath)
+	if err != nil {
+		code = http.StatusUnauthorized
+		return
+	}
+
+	userId, session, err := auth.ID(ak)
+	if err != nil {
+		code = http.StatusUnauthorized
+		return
+	}
+
+	if err = handleRateLimit(requestRawPath, userId); err != nil {
+		code = http.StatusTooManyRequests
+		return
+	}
+
+	if err = handleReplay(r, userId); err != nil {
+		code = http.StatusConflict
+		return
+	}
+
+	if err = handleVerification(userId, session, requestPath); err != nil {
+		code = http.StatusUnauthorized
+		return
+	}
+
+	if res, err = handleRelay(serverAddr, uriPath, userId, req); err != nil {
+		code = http.StatusBadGateway
+		return
+	}
+
+	if err = handleResponse(w, res, requestRawPath, ak); err != nil {
+		code = http.StatusUnauthorized
+		return
+	}
+}
+
+func handleUserAgent(r *http.Request) error {
+	userAgent := r.Header.Get("User-Agent")
+	if userAgent == "" {
+		return errors.New("user agent empty")
+	}
+	configUserAgent, _ := config.Value[string]("USER AGENT")
+	if !strings.HasPrefix(userAgent, configUserAgent) {
+		return errors.Errorf("user agent illegal: %s", userAgent)
+	}
+	return nil
+}
+
+func handleBody(r *http.Request) ([]byte, error) {
+	r.Body = http.MaxBytesReader(nil, r.Body, 10<<20)
+	return io.ReadAll(r.Body)
+}
+
+func handleAuth(r *http.Request, req []byte, requestRawPath string) (string, error) {
 	sign := r.Header.Get("content-sign")
 	if sign == "" {
-		err = errors.New("missing data signature")
-		code = http.StatusUnauthorized
-		return
+		return "", errors.New("missing data signature")
 	}
+	return auth.Check(sign, out, append(req, requestRawPath...))
+}
 
-	//检查请求签名和提取ak
-	ak, err := auth.Check(sign, out, append(req, requestRawPath...))
+func handleRateLimit(path string, userId int64) error {
+	key := kv.HashKey(fmt.Sprintf("%s_%d", path, userId))
+	exists, err := kv.Exists(key, 400)
 	if err != nil {
-		code = http.StatusUnauthorized
-		err = errors.WithStack(err)
-		return
+		return err
 	}
+	if exists {
+		return errors.New("rate limit exceeded, please try again later")
+	}
+	return nil
+}
 
-	//获取用户id和请求的session
-	userId, session_, err := auth.ID(ak)
+func handleReplay(r *http.Request, id int64) error {
+	sign := r.Header.Get("content-sign")
+	return replay(sign, id)
+}
+
+func handleVerification(uid, session int64, path string) error {
+	access, exists := config.Value[string]("ACCESS")
+	if !exists {
+		return nil
+	}
+	_, err := client.Do[any](uid, access+"/gob/session/get", http.MethodPost, struct {
+		Session int64
+		Path    string
+	}{session, path}, client.GOB)
+	return err
+}
+
+func handleRelay(serverAddr, uriPath string, userId int64, req []byte) ([]byte, error) {
+	res, err := client.Do[[]byte](1, serverAddr+"/"+uriPath, http.MethodPost, req, client.BYTES, map[string]any{
+		"user-id": userId,
+	})
+	return res, err
+}
+
+func handleResponse(w http.ResponseWriter, res []byte, requestRawPath, ak string) error {
+	sign, err := auth.Sign(append(res, requestRawPath...), ak)
 	if err != nil {
-		code = http.StatusUnauthorized
-		return
+		return err
 	}
-
-	//限速
-	if err = limit(requestRawPath, userId); err != nil {
-		code = http.StatusBadRequest
-		return
-	}
-
-	//防止重放攻击
-	if err = replay(sign, userId); err != nil {
-		code = http.StatusBadRequest
-		return
-	}
-
-	//session和权限验证
-	if err = verify(userId, session_, requestPath); err != nil {
-		code = http.StatusUnauthorized
-		return
-	}
-
-	//转发
-	if res, err = relay(serverAddr+"/"+uriPath, userId, req); err != nil {
-		return
-	}
-
-	//签名结果
-	if sign, err = auth.Sign(append(res, requestRawPath...), ak); err != nil {
-		code = http.StatusUnauthorized
-		return
-	}
-
 	w.Header().Set("content-sign", sign)
-
-	//返回结果
 	_, _ = w.Write(res)
+	return nil
 }
 
 func Close() {
@@ -216,37 +251,35 @@ func Close() {
 }
 
 func clientIP(r *http.Request) string {
-	realIP := r.Header.Get("X-Real-IP")
-	if realIP != "" {
+	if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
 		return realIP
 	}
 
-	xff := r.Header.Get("X-Forwarded-For")
-	if xff != "" {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		ips := strings.Split(xff, ",")
 		return strings.TrimSpace(ips[0])
 	}
 
-	return strings.Split(r.RemoteAddr, ":")[0]
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return ip
 }
 
-// (pem, key string,err error)
 func sslPem() (string, string, error) {
 	exePath, err := os.Executable()
 	if err != nil {
 		return "", "", errors.WithStack(err)
 	}
-
 	dir := filepath.Dir(exePath)
-	//现寻找程序运行目录
-	sslPath := path.Join(dir, "ssl")
+	sslPath := filepath.Join(dir, "ssl")
 	if _, err = os.Stat(sslPath); err != nil {
-		//再寻找代码目录
 		dir, err = os.Getwd()
 		if err != nil {
 			return "", "", errors.WithStack(err)
 		}
-		sslPath = path.Join(dir, "ssl")
+		sslPath = filepath.Join(dir, "ssl")
 		if _, err = os.Stat(sslPath); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				return "", "", nil
@@ -254,53 +287,33 @@ func sslPem() (string, string, error) {
 			return "", "", errors.WithStack(err)
 		}
 	}
-
 	entries, err := os.ReadDir(sslPath)
 	if err != nil {
 		return "", "", errors.WithStack(err)
 	}
-	if len(entries) < 2 { //文件不在
+	if len(entries) < 2 {
 		return "", "", nil
 	}
-
 	var pemPath, keyPath string
 	for _, entry := range entries {
-		// 忽略目录，只处理文件
 		if entry.IsDir() {
 			continue
 		}
 		fileName := entry.Name()
 		ext := strings.ToLower(filepath.Ext(fileName))
-		// 匹配 .pem 文件（仅在尚未找到时赋值）
 		if ext == ".pem" && pemPath == "" {
 			pemPath = filepath.Join(sslPath, fileName)
 		}
-		// 匹配 .key 文件（仅在尚未找到时赋值）
 		if ext == ".key" && keyPath == "" {
 			keyPath = filepath.Join(sslPath, fileName)
 		}
-		// 性能优化：如果两个文件都找到了，提前退出循环
 		if pemPath != "" && keyPath != "" {
 			break
 		}
 	}
-
 	return pemPath, keyPath, nil
 }
 
-func userAgent(userAgent string) error {
-	if userAgent == "" {
-		return errors.New("user agent empty")
-	}
-	configUserAgent, _ := config.Value[string]("USER AGENT")
-
-	if !strings.HasPrefix(userAgent, configUserAgent) {
-		return errors.New("user agent illegal")
-	}
-	return nil
-}
-
-// (domain, path string, err error)
 func requestPathParts(requestPath string) (domain, path string, err error) {
 	if requestPath == "" || requestPath == "/" {
 		return "", "", errors.New("route empty")
@@ -314,20 +327,6 @@ func requestPathParts(requestPath string) (domain, path string, err error) {
 	return
 }
 
-// 限流
-func limit(path string, userId int64) error {
-	key := kv.HashKey(fmt.Sprintf("%s_%d", path, userId))
-	exists, err := kv.Exists(key, 400)
-	if err != nil {
-		return err
-	}
-	if exists {
-		return errors.New("limit exists")
-	}
-	return nil
-}
-
-// 重放攻击
 func replay(sign string, id int64) error {
 	hashKey := kv.HashKey(fmt.Sprintf("%s_%d", sign, id))
 	exists, err := kv.Exists(hashKey, (out+1)*1000)
@@ -340,37 +339,6 @@ func replay(sign string, id int64) error {
 	return nil
 }
 
-func verify(uid, session int64, path string) error {
-	access, exists := config.Value[string]("ACCESS")
-	if !exists {
-		//没配置验证服务不需要验证
-		return nil
-	}
-	if _, err := client.Do[any](uid, access+"/gob/session/get",
-		http.MethodPost,
-		struct {
-			Session int64
-			Path    string
-		}{
-			session,
-			path,
-		}, client.GOB); err != nil {
-		return err
-	}
-	return nil
-}
-
-// 转发
-func relay(apiURL string, userId int64, req []byte) ([]byte, error) {
-	res, err := client.Do[[]byte](1, apiURL, http.MethodPost, req, client.BYTES, map[string]any{
-		"user-id": userId,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return res, nil
-}
-
 func route(key string) (string, error) {
 	if value, ok := configServer[key]; ok {
 		if len(value) == 0 {
@@ -378,11 +346,9 @@ func route(key string) (string, error) {
 		}
 		return value, nil
 	}
-
 	return "", errors.Errorf("no found route : %s", key)
 }
 
-// 记录log
 type data struct {
 	Ip       string
 	Uri      string
@@ -402,7 +368,6 @@ func log(logCollector string, realIP string, uri string, uid int64, req []byte, 
 		Error:    errStr,
 	}
 	if _, err := client.Do[any](1, logCollector+"/gob/post", http.MethodPost, d, client.GOB); err != nil {
-		//TODO 输出异常
-		return
+		pcolor.PrintError(prefix, "log failed: %s", err.Error())
 	}
 }

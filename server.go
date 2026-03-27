@@ -243,12 +243,12 @@ func handleResponse(w http.ResponseWriter, res []byte, requestRawPath, ak string
 }
 
 func Close() {
-	kv.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := server.Shutdown(ctx); err != nil {
 		pcolor.PrintError(prefix, err.Error())
 	}
+	kv.Close()
 }
 
 func clientIP(r *http.Request) string {

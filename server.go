@@ -96,7 +96,7 @@ func routeHandle(w http.ResponseWriter, r *http.Request) {
 		var errStr string
 		if err != nil {
 			errStr = err.Error()
-			pcolor.PrintError(prefix, errStr)
+			pcolor.PrintError(prefix, err)
 			if code == 0 {
 				code = http.StatusBadRequest
 			}
@@ -221,12 +221,12 @@ func handleVerification(uid, session int64, path string) error {
 	_, err := client.Do[any](uid, configAccess+"/gob/session/get", http.MethodPost, struct {
 		Session int64
 		Path    string
-	}{session, path}, client.GOB)
+	}{session, path}, client.GOB, client.GOB)
 	return err
 }
 
 func handleRelay(serverAddr, uriPath string, userId int64, req []byte) ([]byte, error) {
-	res, err := client.Do[[]byte](1, serverAddr+"/"+uriPath, http.MethodPost, req, client.BYTES, map[string]any{
+	res, err := client.Do[[]byte](1, serverAddr+"/"+uriPath, http.MethodPost, req, client.BYTES, client.BYTES, map[string]any{
 		"user-id": userId,
 	})
 	return res, err
@@ -246,7 +246,7 @@ func Close() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := server.Shutdown(ctx); err != nil {
-		pcolor.PrintError(prefix, err.Error())
+		pcolor.PrintError(prefix, err)
 	}
 	kv.Close()
 }
@@ -370,7 +370,7 @@ func log(logCollector string, userAgent string, realIP string, uri string, uid i
 		Response:  res,
 		Error:     errStr,
 	}
-	if _, err := client.Do[any](1, logCollector+"/gob/post", http.MethodPost, d, client.GOB); err != nil {
-		pcolor.PrintError(prefix, "log failed: %s", err.Error())
+	if _, err := client.Do[any](1, logCollector+"/gob/post", http.MethodPost, d, client.GOB, client.NIL); err != nil {
+		pcolor.PrintError(prefix, err)
 	}
 }

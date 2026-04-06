@@ -14,7 +14,6 @@ import (
 	"github.com/clong1995/go-ansi-color"
 	"github.com/clong1995/go-auth"
 	"github.com/clong1995/go-client"
-	"github.com/clong1995/go-config"
 	"github.com/clong1995/go-db-kv"
 	"github.com/pkg/errors"
 )
@@ -26,19 +25,12 @@ var server *http.Server
 // 过期时间,超期拒绝,重放清除
 var out int64 = 60
 
-var configServer map[string]string
-
 func init() {
+	config()
 	start()
 }
 
 func start() {
-	var exists bool
-	if configServer, exists = config.Value[map[string]string]("SERVER"); !exists || len(configServer) == 0 {
-		pcolor.PrintFatal(prefix, "server empty")
-		return
-	}
-
 	//ssl
 	pem, key, err := sslPem()
 	if err != nil {
@@ -52,11 +44,16 @@ func start() {
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 30 * time.Second,
 	}
-	if pem == "" || key == "" {
-		server.Addr = ":80"
+	if configAddr == "" {
+		if pem == "" || key == "" {
+			server.Addr = ":80"
+		} else {
+			server.Addr = ":443"
+		}
 	} else {
-		server.Addr = ":443"
+		server.Addr = configAddr
 	}
+
 	http.HandleFunc("/", routeHandle)
 
 	go func() {
@@ -85,6 +82,8 @@ func routeHandle(w http.ResponseWriter, r *http.Request) {
 	var code int
 	var userId int64
 	var req, res []byte
+	var userAgent string
+
 	requestPath := r.URL.Path
 	requestRawPath := requestPath
 
@@ -104,15 +103,15 @@ func routeHandle(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(code)
 			_, _ = w.Write([]byte(errStr))
 		}
-		logCollector, exists := config.Value[string]("LOG COLLECTOR")
-		if !exists || logCollector == "" {
+
+		if configLogCollector == "" {
 			return
 		}
 		ip := clientIP(r)
-		go log(logCollector, ip, r.RequestURI, userId, req, res, errStr)
+		go log(configLogCollector, userAgent, ip, r.RequestURI, userId, req, res, errStr)
 	}()
 
-	if err = handleUserAgent(r); err != nil {
+	if userAgent, err = handleUserAgent(r); err != nil {
 		code = http.StatusForbidden
 		return
 	}
@@ -171,16 +170,18 @@ func routeHandle(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func handleUserAgent(r *http.Request) error {
+func handleUserAgent(r *http.Request) (string, error) {
 	userAgent := r.Header.Get("User-Agent")
 	if userAgent == "" {
-		return errors.New("user agent empty")
+		return "", errors.New("user agent empty")
 	}
-	configUserAgent, _ := config.Value[string]("USER AGENT")
+	if configUserAgent == "" {
+		return userAgent, nil
+	}
 	if !strings.HasPrefix(userAgent, configUserAgent) {
-		return errors.Errorf("user agent illegal: %s", userAgent)
+		return "", errors.Errorf("user agent illegal: %s", userAgent)
 	}
-	return nil
+	return userAgent, nil
 }
 
 func handleBody(r *http.Request) ([]byte, error) {
@@ -214,11 +215,10 @@ func handleReplay(r *http.Request, id int64) error {
 }
 
 func handleVerification(uid, session int64, path string) error {
-	access, exists := config.Value[string]("ACCESS")
-	if !exists {
+	if configAccess == "" {
 		return nil
 	}
-	_, err := client.Do[any](uid, access+"/gob/session/get", http.MethodPost, struct {
+	_, err := client.Do[any](uid, configAccess+"/gob/session/get", http.MethodPost, struct {
 		Session int64
 		Path    string
 	}{session, path}, client.GOB)
@@ -351,22 +351,24 @@ func route(key string) (string, error) {
 }
 
 type data struct {
-	Ip       string
-	Uri      string
-	Uid      int64
-	Request  []byte
-	Response []byte
-	Error    string
+	UserAgent string
+	Ip        string
+	Uri       string
+	Uid       int64
+	Request   []byte
+	Response  []byte
+	Error     string
 }
 
-func log(logCollector string, realIP string, uri string, uid int64, req []byte, res []byte, errStr string) {
+func log(logCollector string, userAgent string, realIP string, uri string, uid int64, req []byte, res []byte, errStr string) {
 	d := data{
-		Ip:       realIP,
-		Uri:      uri,
-		Uid:      uid,
-		Request:  req,
-		Response: res,
-		Error:    errStr,
+		UserAgent: userAgent,
+		Ip:        realIP,
+		Uri:       uri,
+		Uid:       uid,
+		Request:   req,
+		Response:  res,
+		Error:     errStr,
 	}
 	if _, err := client.Do[any](1, logCollector+"/gob/post", http.MethodPost, d, client.GOB); err != nil {
 		pcolor.PrintError(prefix, "log failed: %s", err.Error())

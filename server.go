@@ -211,18 +211,32 @@ func handleRateLimit(path string, userId int64) error {
 
 func handleReplay(r *http.Request, id int64) error {
 	sign := r.Header.Get("content-sign")
-	return replay(sign, id)
+	hashKey := kv.HashKey(fmt.Sprintf("%s_%d", sign, id))
+	exists, err := kv.Exists(hashKey, (out+1)*1000)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return errors.New("disable replay")
+	}
+	return nil
 }
 
 func handleVerification(uid, session int64, path string) error {
-	if configAccess == "" {
+	if configAccess == "" { //没有权限
 		return nil
 	}
-	_, err := client.Do[any](uid, configAccess+"/gob/session/get", http.MethodPost, struct {
+	result, err := client.Do[bool](uid, configAccess, http.MethodPost, struct {
 		Session int64
 		Path    string
 	}{session, path}, client.GOB, client.GOB)
-	return err
+	if err != nil {
+		return err
+	}
+	if !result {
+		return errors.New("verification failed")
+	}
+	return nil
 }
 
 func handleRelay(serverAddr, uriPath string, userId int64, req []byte) ([]byte, error) {
@@ -326,18 +340,6 @@ func requestPathParts(requestPath string) (domain, path string, err error) {
 	domain = parts[1]
 	path = strings.Join(parts[2:], "/")
 	return
-}
-
-func replay(sign string, id int64) error {
-	hashKey := kv.HashKey(fmt.Sprintf("%s_%d", sign, id))
-	exists, err := kv.Exists(hashKey, (out+1)*1000)
-	if err != nil {
-		return err
-	}
-	if exists {
-		return errors.New("disable replay")
-	}
-	return nil
 }
 
 func route(key string) (string, error) {

@@ -96,7 +96,7 @@ func routeHandle(w http.ResponseWriter, r *http.Request) {
 		var errStr string
 		if err != nil {
 			errStr = err.Error()
-			pcolor.PrintError(prefix, err)
+			pcolor.PrintErr(prefix, "%+v", err)
 			if code == 0 {
 				code = http.StatusBadRequest
 			}
@@ -104,11 +104,11 @@ func routeHandle(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte(errStr))
 		}
 
-		if configLogCollector == "" {
+		if configLog == "" {
 			return
 		}
 		ip := clientIP(r)
-		go log(configLogCollector, userAgent, ip, r.RequestURI, userId, req, res, errStr)
+		go logCollector(userAgent, ip, r.RequestURI, userId, req, res, errStr)
 	}()
 
 	if userAgent, err = handleUserAgent(r); err != nil {
@@ -362,7 +362,7 @@ type data struct {
 	Error     string
 }
 
-func log(logCollector string, userAgent string, realIP string, uri string, uid int64, req []byte, res []byte, errStr string) {
+func logCollector(userAgent string, realIP string, uri string, uid int64, req []byte, res []byte, errStr string) {
 	d := data{
 		UserAgent: userAgent,
 		Ip:        realIP,
@@ -372,7 +372,7 @@ func log(logCollector string, userAgent string, realIP string, uri string, uid i
 		Response:  res,
 		Error:     errStr,
 	}
-	if _, err := client.Do[any](1, logCollector+"/gob/post", http.MethodPost, d, client.GOB, client.NIL); err != nil {
-		pcolor.PrintError(prefix, err)
+	if _, err := client.Do[any](1, configLog, http.MethodPost, d, client.GOB, client.NIL); err != nil {
+		pcolor.PrintErr(prefix, "%+v", err)
 	}
 }

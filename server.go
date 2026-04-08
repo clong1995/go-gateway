@@ -194,7 +194,7 @@ func handleAuth(r *http.Request, req []byte, requestRawPath string) (string, err
 	if sign == "" {
 		return "", errors.New("missing data signature")
 	}
-	return auth.Check(sign, out, append(req, requestRawPath...))
+	return auth.Check(sign, out, req, requestRawPath)
 }
 
 func handleRateLimit(path string, userId int64) error {
@@ -247,7 +247,7 @@ func handleRelay(serverAddr, uriPath string, userId int64, req []byte) ([]byte, 
 }
 
 func handleResponse(w http.ResponseWriter, res []byte, requestRawPath, ak string) error {
-	sign, err := auth.Sign(append(res, requestRawPath...), ak)
+	sign, err := auth.Sign(res, ak, requestRawPath)
 	if err != nil {
 		return err
 	}

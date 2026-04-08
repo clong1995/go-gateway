@@ -4,7 +4,7 @@ go 1.26
 
 require (
 	github.com/clong1995/go-ansi-color v0.0.0-20260329160324-213fff2ee7eb
-	github.com/clong1995/go-auth v0.0.0-20260325161949-b400270ae043
+	github.com/clong1995/go-auth v0.0.0-20260407153431-b67bf6cfb008
 	github.com/clong1995/go-client v0.0.0-20260330053638-3bbfd90372e5
 	github.com/clong1995/go-config v0.0.0-20260325145758-46c5a40c3ecf
 	github.com/clong1995/go-db-kv v0.0.0-20260329061028-35f48bcbfcb1

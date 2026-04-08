@@ -1,4 +1,4 @@
-module go-gateway
+module github.com/clong1995/go-gateway
 
 go 1.26
 

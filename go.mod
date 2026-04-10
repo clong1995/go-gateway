@@ -4,9 +4,9 @@ go 1.26
 
 require (
 	github.com/clong1995/go-ansi-color v0.0.0-20260329160324-213fff2ee7eb
-	github.com/clong1995/go-auth v0.0.0-20260407153431-b67bf6cfb008
+	github.com/clong1995/go-auth v0.0.0-20260408075029-632306b0da92
 	github.com/clong1995/go-client v0.0.0-20260330053638-3bbfd90372e5
-	github.com/clong1995/go-config v0.0.0-20260325145758-46c5a40c3ecf
+	github.com/clong1995/go-config v0.0.0-20260410163819-3bbb4da18a0a
 	github.com/clong1995/go-db-kv v0.0.0-20260329061028-35f48bcbfcb1
 	github.com/pkg/errors v0.9.1
 )
@@ -25,10 +25,10 @@ require (
 	go.opentelemetry.io/otel v1.43.0 // indirect
 	go.opentelemetry.io/otel/metric v1.43.0 // indirect
 	go.opentelemetry.io/otel/trace v1.43.0 // indirect
-	golang.org/x/net v0.52.0 // indirect
+	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.42.0 // indirect
+	golang.org/x/sys v0.43.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
 
-replace github.com/clong1995/go-auth => /Users/markeckles/Desktop/go-mod/go-auth
+//replace github.com/clong1995/go-auth => /Users/markeckles/Desktop/go-mod/go-auth

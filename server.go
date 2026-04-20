@@ -100,7 +100,20 @@ func corsMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
 		// 5. 允许浏览器缓存预检请求的结果 (例如 1 小时)，减少 OPTIONS 请求次数
 		w.Header().Set("Access-Control-Max-Age", "3600")
-		// 如果是预检请求 (OPTIONS)，直接返回并结束
+		// 6. 允许暴露所有响应 Header 供前端读取
+		w.Header().Set("Access-Control-Expose-Headers", "*")
+
+		// 7. 【新增】允许私有网络访问 (Private Network Access)
+		// 解决局域网/localhost 跨域的核心：当公网网站访问私有 IP 时，浏览器会发这个头
+		w.Header().Set("Access-Control-Allow-Private-Network", "true")
+
+		// 8. 【新增】Vary 响应头：告诉代理/浏览器，缓存是基于这些 Header 变化的
+		// 这能防止缓存导致不同来源的请求互相干扰
+		w.Header().Add("Vary", "Origin")
+		w.Header().Add("Vary", "Access-Control-Request-Method")
+		w.Header().Add("Vary", "Access-Control-Request-Headers")
+
+		// 9. 如果是预检请求 (OPTIONS)，直接返回并结束
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusNoContent)
 			return

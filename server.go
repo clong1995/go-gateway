@@ -40,6 +40,7 @@ func start() {
 
 	//server
 	server = &http.Server{
+		Handler:      corsMiddleware(http.DefaultServeMux),
 		IdleTimeout:  90 * time.Second,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 30 * time.Second,
@@ -75,6 +76,37 @@ func start() {
 	}()
 
 	pcolor.PrintSucc(prefix, "listening %s\n", server.Addr)
+}
+
+// CORS 中间件
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 1. 动态允许 Origin
+		// 不使用 "*"，而是直接获取请求头里的 Origin，这样可以支持 Allow-Credentials
+		origin := r.Header.Get("Origin")
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+
+		// 2. 动态允许所有 Header
+		// 获取客户端预检请求里询问的所有 Header，并全部允许
+		reqHeaders := r.Header.Get("Access-Control-Request-Headers")
+		w.Header().Set("Access-Control-Allow-Headers", reqHeaders)
+
+		// 3. 动态允许所有 Method
+		// 获取客户端预检请求里询问的方法，并全部允许
+		reqMethod := r.Header.Get("Access-Control-Request-Method")
+		w.Header().Set("Access-Control-Allow-Methods", reqMethod)
+
+		// 4. 允许携带 Cookie/凭证
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+		// 5. 允许浏览器缓存预检请求的结果 (例如 1 小时)，减少 OPTIONS 请求次数
+		w.Header().Set("Access-Control-Max-Age", "3600")
+		// 如果是预检请求 (OPTIONS)，直接返回并结束
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func routeHandle(w http.ResponseWriter, r *http.Request) {

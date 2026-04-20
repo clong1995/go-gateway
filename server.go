@@ -115,7 +115,9 @@ func corsMiddleware(next http.Handler) http.Handler {
 
 		// 9. 如果是预检请求 (OPTIONS)，直接返回并结束
 		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusNoContent)
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Header().Set("Content-Length", "0") // 解决某些库读取 length 失败的问题
+			w.WriteHeader(http.StatusOK)
 			return
 		}
 		next.ServeHTTP(w, r)

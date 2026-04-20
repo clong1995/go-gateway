@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -81,45 +82,23 @@ func start() {
 // CORS 中间件
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 1. 动态允许 Origin
-		// 不使用 "*"，而是直接获取请求头里的 Origin，这样可以支持 Allow-Credentials
-		origin := r.Header.Get("Origin")
-		w.Header().Set("Access-Control-Allow-Origin", origin)
 
-		// 2. 动态允许所有 Header
-		// 获取客户端预检请求里询问的所有 Header，并全部允许
-		reqHeaders := r.Header.Get("Access-Control-Request-Headers")
-		w.Header().Set("Access-Control-Allow-Headers", reqHeaders)
-
-		// 3. 动态允许所有 Method
-		// 获取客户端预检请求里询问的方法，并全部允许
-		reqMethod := r.Header.Get("Access-Control-Request-Method")
-		w.Header().Set("Access-Control-Allow-Methods", reqMethod)
-
-		// 4. 允许携带 Cookie/凭证
-		w.Header().Set("Access-Control-Allow-Credentials", "true")
-		// 5. 允许浏览器缓存预检请求的结果 (例如 1 小时)，减少 OPTIONS 请求次数
-		w.Header().Set("Access-Control-Max-Age", "3600")
-		// 6. 允许暴露所有响应 Header 供前端读取
+		// 1. 允许所有的 Origin
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		// 2. 允许的所有方法
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH")
+		// 3. 允许的所有 Header
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Content-Sign, Authorization, X-Requested-With")
 		w.Header().Set("Access-Control-Expose-Headers", "*")
 
-		// 7. 【新增】允许私有网络访问 (Private Network Access)
-		// 解决局域网/localhost 跨域的核心：当公网网站访问私有 IP 时，浏览器会发这个头
-		w.Header().Set("Access-Control-Allow-Private-Network", "true")
+		w.Header().Set("Access-Control-Max-Age", "3600")
 
-		// 8. 【新增】Vary 响应头：告诉代理/浏览器，缓存是基于这些 Header 变化的
-		// 这能防止缓存导致不同来源的请求互相干扰
-		w.Header().Add("Vary", "Origin")
-		w.Header().Add("Vary", "Access-Control-Request-Method")
-		w.Header().Add("Vary", "Access-Control-Request-Headers")
-
-		// 9. 如果是预检请求 (OPTIONS)，直接返回并结束
+		// 如果是预检请求 (OPTIONS)，直接返回 200，不再执行后续逻辑
 		if r.Method == "OPTIONS" {
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			w.Header().Set("Content-Length", "0") // 解决某些库读取 length 失败的问题
-			w.WriteHeader(http.StatusOK)
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
+		// 继续处理实际请求
 		next.ServeHTTP(w, r)
 	})
 }
@@ -299,6 +278,7 @@ func handleResponse(w http.ResponseWriter, res []byte, requestRawPath, ak string
 		return err
 	}
 	w.Header().Set("content-sign", sign)
+	w.Header().Set("Content-Length", strconv.Itoa(len(res)))
 	_, _ = w.Write(res)
 	return nil
 }

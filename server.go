@@ -43,8 +43,8 @@ func start() {
 	server = &http.Server{
 		Handler:      corsMiddleware(http.DefaultServeMux),
 		IdleTimeout:  90 * time.Second,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		ReadTimeout:  60 * time.Second,
+		WriteTimeout: 60 * time.Second,
 	}
 	if configAddr == "" {
 		if pem == "" || key == "" {
